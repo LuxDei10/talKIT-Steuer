@@ -6,6 +6,8 @@ Streamlit-Oberfläche für die Steuervorbereitung.
 
 import streamlit as st
 import pandas as pd
+import base64
+from pathlib import Path
 from berechnung import (
     pruefe_spalten, pruefe_mwst_konsistenz, erkenne_zeitraeume,
     bereite_daten_vor, berechne_voranmeldung, berechne_eur,
@@ -21,24 +23,33 @@ st.set_page_config(
     layout='centered',
 )
 
+# Darkmode-kompatibles CSS: nur strukturelle Styles, keine Farbüberschreibungen
 st.markdown("""
 <style>
     .main { max-width: 760px; margin: 0 auto; }
     .stAlert { border-radius: 6px; }
-    div[data-testid="metric-container"] {
-        background: #F5F7FA;
-        border: 1px solid #D0D7E3;
-        border-radius: 6px;
-        padding: 12px 16px;
-    }
-    h1 { color: #1A1A2E; }
-    h2, h3 { color: #4A90D9; }
     .elster-zeile {
         font-family: monospace;
-        background: #F5F7FA;
-        padding: 4px 8px;
+        padding: 6px 10px;
         border-left: 3px solid #4A90D9;
-        margin: 2px 0;
+        margin: 3px 0;
+        border-radius: 0 4px 4px 0;
+    }
+    .elster-zeile-nr {
+        font-size: 0.75em;
+        opacity: 0.6;
+        display: block;
+    }
+    .elster-zeile-inhalt {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+    }
+    .elster-zeile-betrag {
+        font-size: 1.05em;
+        font-weight: bold;
+        white-space: nowrap;
+        margin-left: 12px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -51,20 +62,46 @@ def formatiere_betrag(wert: float) -> str:
 
 
 def zeige_elster_zeile(zeilen_nr: str, bezeichnung: str, wert: float):
-    """Einheitliche Darstellung einer Elster-Zeile."""
+    """Einheitliche Darstellung einer Elster-Zeile – darkmode-kompatibel."""
     st.markdown(
         f'<div class="elster-zeile">'
-        f'<span style="color:#888;font-size:0.8em;">Zeile {zeilen_nr}</span><br>'
-        f'<b>{bezeichnung}</b> &nbsp; '
-        f'<span style="float:right;font-size:1.1em;">{formatiere_betrag(wert)}</span>'
+        f'<span class="elster-zeile-nr">Zeile {zeilen_nr}</span>'
+        f'<div class="elster-zeile-inhalt">'
+        f'<span>{bezeichnung}</span>'
+        f'<span class="elster-zeile-betrag">{formatiere_betrag(wert)}</span>'
+        f'</div>'
         f'</div>',
         unsafe_allow_html=True
     )
 
 
+def zeige_logo():
+    """Logo anzeigen falls vorhanden, sonst Textfallback."""
+    logo_pfad = Path('talKIT logo gruen.png')
+    if logo_pfad.exists():
+        with open(logo_pfad, 'rb') as f:
+            data = base64.b64encode(f.read()).decode()
+        st.markdown(
+            f'<img src="data:image/png;base64,{data}" '
+            f'style="height:40px; margin-bottom:8px;" alt="talKIT">',
+            unsafe_allow_html=True
+        )
+    else:
+        st.markdown('**talKIT e.V.**')
+
+
+def neue_datei_button():
+    """Setzt den Session State zurück und löst einen Rerun aus."""
+    if st.button('🔄 Neue Datei wählen', type='secondary'):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+
+
 # ── SCHRITT 1: UPLOAD ─────────────────────────────────────────────────────────
 
-st.title('talKIT Steuermodul')
+zeige_logo()
+st.title('Steuermodul')
 st.caption('Vorbereitung der Steuerunterlagen auf Basis des Podio-Exports')
 
 st.divider()
@@ -91,10 +128,12 @@ with st.spinner('Datei wird eingelesen …'):
                 f'Die Datei enthält {len(xls.sheet_names)} Tabellenblätter. '
                 f'Bitte eine Datei mit genau einem Blatt hochladen.'
             )
+            neue_datei_button()
             st.stop()
         df_roh = pd.read_excel(xls, sheet_name=xls.sheet_names[0])
     except Exception as e:
         st.error(f'Datei konnte nicht eingelesen werden: {e}')
+        neue_datei_button()
         st.stop()
 
 # Spaltenprüfung
@@ -105,6 +144,7 @@ if fehlende:
         'Bitte prüfe den Podio-Export:\n\n' +
         '\n'.join(f'- `{s}`' for s in fehlende)
     )
+    neue_datei_button()
     st.stop()
 
 # MwSt-Konsistenzprüfung
@@ -121,7 +161,7 @@ if hat_fehler or hat_andere:
     ):
         if hat_fehler:
             st.markdown('**Folgende GVs haben inkonsistente MwSt-Felder. '
-                        'Bitte in Podio prüfen und korrigieren:**')
+                        'Bitte in Podio korrigieren und Datei neu exportieren:**')
             st.dataframe(fehler_df, use_container_width=True, hide_index=True)
 
         if hat_andere:
@@ -135,8 +175,10 @@ if hat_fehler or hat_andere:
                 st.session_state['fehler_bestaetigt'] = True
                 st.rerun()
         with col2:
-            st.button('Abbrechen', type='primary',
-                      on_click=lambda: st.session_state.clear())
+            # Neue Datei wählen: File-Uploader zurücksetzen
+            if st.button('🔄 Neue Datei wählen', type='primary'):
+                st.session_state['fehler_bestaetigt'] = False
+                st.rerun()
 
         if not st.session_state.get('fehler_bestaetigt', False):
             st.stop()
@@ -180,13 +222,11 @@ st.divider()
 if steuerart == 'Umsatzsteuer-Voranmeldung':
     st.subheader('Zeitraum auswählen')
 
-    # Vorschlag: Quartal mit den meisten Buchungen
     vorschlag = zeitraeume.sort_values('Buchungen', ascending=False).iloc[0]
     vorschlag_q = int(vorschlag['Quartal'])
     vorschlag_j = int(vorschlag['Jahr'])
 
     verfuegbare_jahre = sorted(zeitraeume['Jahr'].unique().tolist(), reverse=True)
-    verfuegbare_quartale = [1, 2, 3, 4]
 
     col1, col2 = st.columns(2)
     with col1:
@@ -196,12 +236,11 @@ if steuerart == 'Umsatzsteuer-Voranmeldung':
         )
     with col2:
         gewaehltes_quartal = st.selectbox(
-            'Quartal', options=verfuegbare_quartale,
+            'Quartal', options=[1, 2, 3, 4],
             index=vorschlag_q - 1,
             format_func=lambda q: f'Q{q}'
         )
 
-    # Buchungsanzahl für gewählten Zeitraum
     treffer = zeitraeume[
         (zeitraeume['Jahr'] == gewaehltes_jahr) &
         (zeitraeume['Quartal'] == gewaehltes_quartal)
@@ -209,24 +248,19 @@ if steuerart == 'Umsatzsteuer-Voranmeldung':
     if not treffer.empty:
         anzahl = int(treffer.iloc[0]['Buchungen'])
         st.caption(
-            f'ℹ️ Vorschlag basierend auf deinen Daten: '
-            f'Q{vorschlag_q} {vorschlag_j} ({int(vorschlag["Buchungen"])} Buchungen) · '
+            f'ℹ️ Vorschlag: Q{vorschlag_q} {vorschlag_j} '
+            f'({int(vorschlag["Buchungen"])} Buchungen) · '
             f'Gewählt: Q{gewaehltes_quartal} {gewaehltes_jahr} ({anzahl} Buchungen)'
         )
     else:
-        st.warning(
-            f'Keine Buchungen für Q{gewaehltes_quartal} {gewaehltes_jahr} gefunden.'
-        )
+        st.warning(f'Keine Buchungen für Q{gewaehltes_quartal} {gewaehltes_jahr} in der Datei.')
 
-    # Alle verfügbaren Zeiträume
     with st.expander('Alle Zeiträume in der Datei'):
         anzeige = zeitraeume.copy()
         anzeige['Quartal'] = anzeige['Quartal'].apply(lambda q: f'Q{q}')
         st.dataframe(anzeige, use_container_width=True, hide_index=True)
 
     st.divider()
-
-    # ── SCHRITT 6A: BERECHNUNG VORANMELDUNG ──────────────────────────────────
 
     if st.button('🧮 Voranmeldung berechnen', type='primary'):
         ergebnis = berechne_voranmeldung(df, quartal=gewaehltes_quartal, jahr=gewaehltes_jahr)
@@ -253,19 +287,13 @@ if steuerart == 'Umsatzsteuer-Voranmeldung':
 
             st.divider()
             zahllast = ergebnis['zahllast_kontrolle']
-            if zahllast > 0:
-                st.metric('Interne Zahllast (Kontrolle)', formatiere_betrag(zahllast),
-                          help='Zahlung ans Finanzamt. Positiv = du zahlst.')
-            else:
-                st.metric('Interne Zahllast (Kontrolle)', formatiere_betrag(zahllast),
-                          help='Erstattung vom Finanzamt. Negativ = du bekommst Geld zurück.')
-
-            st.caption(
-                'Die Zahllast ist eine interne Kontrollgröße. '
-                'Maßgeblich sind die Zeilen 13–38 im Elster-Formular.'
+            st.metric(
+                'Interne Zahllast (Kontrolle)',
+                formatiere_betrag(zahllast),
+                help='Positiv = Zahlung ans Finanzamt · Negativ = Erstattung vom Finanzamt. '
+                     'Nur zur internen Kontrolle – maßgeblich sind die Zeilen 13–38.'
             )
 
-            # PDF-Export
             pdf_bytes = exportiere_voranmeldung(ergebnis)
             st.download_button(
                 label='📥 Als PDF exportieren',
@@ -283,19 +311,18 @@ else:
     verfuegbare_jahre = sorted(zeitraeume['Jahr'].unique().tolist(), reverse=True)
     gewaehltes_jahr = st.selectbox('Jahr', options=verfuegbare_jahre)
 
-    # Vollständigkeitsprüfung
     jahr_info = zeitraeume[zeitraeume['Jahr'] == gewaehltes_jahr]
     vorhandene_quartale = sorted(jahr_info['Quartal'].tolist())
-    ist_vollstaendig = len(vorhandene_quartale) == 4
+    fehlende_q = [q for q in [1, 2, 3, 4] if q not in vorhandene_quartale]
 
-    if ist_vollstaendig:
+    if not fehlende_q:
         st.success(f'✅ {gewaehltes_jahr}: Alle 4 Quartale vorhanden.')
     else:
-        fehlende_q = [q for q in [1, 2, 3, 4] if q not in vorhandene_quartale]
         st.warning(
             f'⚠️ {gewaehltes_jahr} ist unvollständig – '
-            f'fehlende Quartale: {", ".join(f"Q{q}" for q in fehlende_q)}. '
-            f'Die Jahressteuererklärung wird nur auf Basis der vorhandenen Daten berechnet.'
+            f'keine Buchungsdaten für: {", ".join(f"Q{q}" for q in fehlende_q)}. '
+            f'Für diese Quartale wird die Zahllast als 0,00 € angenommen. '
+            f'Bitte die Vorauszahlungen vollständig eintragen.'
         )
 
     st.divider()
@@ -305,14 +332,14 @@ else:
     st.subheader('Geleistete USt-Vorauszahlungen')
     st.caption(
         'Trage hier die tatsächlich abgeführten Beträge ein. '
-        'Positiver Wert = Zahlung ans Finanzamt · Negativer Wert = Rückzahlung vom Finanzamt'
+        'Positiv = Zahlung ans Finanzamt · Negativ = Rückzahlung vom Finanzamt'
     )
 
     col1, col2 = st.columns(2)
     col3, col4 = st.columns(2)
     with col1:
-        vz_q1 = st.number_input('Q1', value=0.0, step=0.01, format='%.2f',
-                                 key='vz_q1', help='Positiv = gezahlt, Negativ = erstattet')
+        vz_q1 = st.number_input('Q1', value=0.0, step=0.01, format='%.2f', key='vz_q1',
+                                 help='Positiv = gezahlt · Negativ = erstattet')
     with col2:
         vz_q2 = st.number_input('Q2', value=0.0, step=0.01, format='%.2f', key='vz_q2')
     with col3:
@@ -328,19 +355,16 @@ else:
 
     if st.button('🧮 Jahressteuer berechnen', type='primary'):
 
-        # EÜR
         eur = berechne_eur(df, jahr=gewaehltes_jahr)
-        # USt Jahres
         ust = berechne_ust_jahres(df, jahr=gewaehltes_jahr, vorauszahlungen=vorauszahlungen)
 
         if eur is None or ust is None:
             st.error(f'Keine ausreichenden Daten für das Jahr {gewaehltes_jahr}.')
             st.stop()
 
-        # KSt/GewSt
         kst_gewst = berechne_kst_gewst(eur, jahr=gewaehltes_jahr)
 
-        # ── EÜR Ausgabe ──
+        # ── EÜR ──
         st.subheader(f'📊 Anlage EÜR – {gewaehltes_jahr}')
         st.caption('Einnahmenüberschussrechnung · Basis: Überweisungsdatum')
 
@@ -365,7 +389,7 @@ else:
                            eur['zeile_48_vorsteuer'])
 
         st.metric(
-            f'Gewinn / Verlust Sphäre D (Zeile 75)',
+            'Gewinn / Verlust Sphäre D (Zeile 75)',
             formatiere_betrag(eur['gewinn_verlust_d'])
         )
 
@@ -381,23 +405,36 @@ else:
         zeige_elster_zeile('16', 'Umsätze andere Steuersätze', ust['zeile_16_netto_andere'])
         zeige_elster_zeile('38', 'Abziehbare Vorsteuer gesamt', ust['zeile_38_vorsteuer'])
 
+        # Quartalskontrolle – alle 4 Quartale zeigen, auch ohne Buchungsdaten
         st.markdown('**Quartalskontrolle**')
+        if fehlende_q:
+            st.caption(
+                f'ℹ️ Quartale ohne Buchungsdaten in der Datei '
+                f'({", ".join(f"Q{q}" for q in fehlende_q)}): '
+                f'berechnete Zahllast = 0,00 €. '
+                f'Vorauszahlungen dieser Quartale fließen trotzdem in den Saldo ein.'
+            )
+
         q_data = []
         for q in [1, 2, 3, 4]:
             q_erg = ust['quartalsergebnisse'].get(q)
+            vz = vorauszahlungen[q]
             if q_erg:
                 zahllast = q_erg['zahllast_kontrolle']
-                vz = vorauszahlungen[q]
                 q_data.append({
                     'Quartal': f'Q{q}',
+                    'Buchungsdaten': '✅',
                     'Zahllast berechnet': formatiere_betrag(zahllast),
                     'Vorauszahlung geleistet': formatiere_betrag(vz),
                     'Differenz': formatiere_betrag(zahllast - vz),
                 })
             else:
                 q_data.append({
-                    'Quartal': f'Q{q}', 'Zahllast berechnet': '–',
-                    'Vorauszahlung geleistet': '–', 'Differenz': '–'
+                    'Quartal': f'Q{q}',
+                    'Buchungsdaten': '⚠️ fehlt',
+                    'Zahllast berechnet': '0,00 €',
+                    'Vorauszahlung geleistet': formatiere_betrag(vz),
+                    'Differenz': formatiere_betrag(0.0 - vz),
                 })
 
         st.dataframe(pd.DataFrame(q_data), use_container_width=True, hide_index=True)
@@ -422,11 +459,13 @@ else:
             st.markdown('**Berechnungsgrundlage**')
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric('Brutto-Einnahmen D', formatiere_betrag(kst_gewst['brutto_einnahmen_d']))
+                st.metric('Brutto-Einnahmen D',
+                          formatiere_betrag(kst_gewst['brutto_einnahmen_d']))
             with col2:
                 st.metric('Gewinn D', formatiere_betrag(kst_gewst['gewinn_d']))
             with col3:
-                st.metric('Zu versteuern', formatiere_betrag(kst_gewst['zu_versteuernder_gewinn']))
+                st.metric('Zu versteuern',
+                          formatiere_betrag(kst_gewst['zu_versteuernder_gewinn']))
 
             st.markdown('**Körperschaftsteuer**')
             zeige_elster_zeile('–', 'Körperschaftsteuer 15 %', kst_gewst['kst'])
@@ -434,18 +473,18 @@ else:
             zeige_elster_zeile('–', 'KSt gesamt', kst_gewst['kst_gesamt'])
 
             st.markdown('**Gewerbesteuer**')
-            zeige_elster_zeile('–', 'Steuermessbetrag (× 3,5 %)', kst_gewst['gewst_messbetrag'])
+            zeige_elster_zeile('–', 'Steuermessbetrag (× 3,5 %)',
+                               kst_gewst['gewst_messbetrag'])
             zeige_elster_zeile(
                 '–',
                 f'Gewerbesteuer (Hebesatz {kst_gewst["gewst_hebesatz_prozent"]} %)',
                 kst_gewst['gewst']
             )
-            st.metric('Steuerbelastung gesamt', formatiere_betrag(kst_gewst['steuer_gesamt']))
+            st.metric('Steuerbelastung gesamt',
+                      formatiere_betrag(kst_gewst['steuer_gesamt']))
 
         st.divider()
 
-        # ── PDF-Export ────────────────────────────────────────────────────────
-        # Vorauszahlungen für Quartalstabelle im PDF mitgeben
         for q in [1, 2, 3, 4]:
             if ust['quartalsergebnisse'].get(q):
                 ust[f'vz_q{q}'] = vorauszahlungen[q]
