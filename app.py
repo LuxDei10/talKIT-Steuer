@@ -194,17 +194,38 @@ if 'spalten_mapping' not in st.session_state:
 
 hat_probleme = bool(aehnlich or fehlend)
 
-if hat_probleme:
-    st.warning(
-        f'Spalten-Zuordnung: {len(exakt)} eindeutig · '
-        f'{len(aehnlich)} unsicher · {len(fehlend)} nicht gefunden'
+# ── Spaltenübersicht immer anzeigen ──────────────────────────────────────────
+# Tabellarische Übersicht: Pflicht-Spalte | Status | Gefunden als
+uebersicht_titel = (
+    f'Spalten-Zuordnung: {len(exakt)} erkannt'
+    + (f' · {len(aehnlich)} unsicher' if aehnlich else '')
+    + (f' · {len(fehlend)} fehlen' if fehlend else '')
+)
+
+# Bei Problemen: direkt expandiert; sonst zugeklappt
+with st.expander(uebersicht_titel, expanded=hat_probleme):
+    # Übersichtstabelle bauen
+    zeilen = []
+    for k in _PFLICHT:
+        v = mapping.get(k)
+        if v == k:
+            zeilen.append({'Pflicht-Spalte': k, 'Status': '✅ Erkannt', 'Gefunden als': k})
+        elif v is not None:
+            zeilen.append({'Pflicht-Spalte': k, 'Status': '⚠️ Ähnlich', 'Gefunden als': v})
+        else:
+            zeilen.append({'Pflicht-Spalte': k, 'Status': '❌ Fehlt', 'Gefunden als': '–'})
+
+    st.dataframe(
+        pd.DataFrame(zeilen),
+        use_container_width=True,
+        hide_index=True,
     )
-    with st.expander('Spalten-Zuordnung prüfen und anpassen', expanded=True):
+
+    if hat_probleme:
         st.caption(
-            'Das System hat versucht, die Spalten automatisch zuzuordnen. '
+            'Das System hat versucht, Spalten automatisch zuzuordnen. '
             'Bitte prüfe unsichere Zuordnungen und ergänze fehlende Spalten.'
         )
-
         neues_mapping = dict(st.session_state['spalten_mapping'])
 
         if aehnlich:
@@ -250,13 +271,15 @@ if hat_probleme:
             if not st.session_state.get('mapping_bestaetigt', False):
                 st.stop()
 
-    # DataFrame umbenennen nach bestätigtem Mapping
+# DataFrame umbenennen nach Mapping (auch bei exaktem Match keine Umbenennung nötig)
+if hat_probleme and st.session_state.get('mapping_bestaetigt', False):
     umbenennungen = {
         v: k for k, v in st.session_state['spalten_mapping'].items() if v != k
     }
     if umbenennungen:
         df_roh = df_roh.rename(columns=umbenennungen)
-else:
+
+if not hat_probleme:
     st.session_state['mapping_bestaetigt'] = True
 
 # MwSt-Konsistenzprüfung
