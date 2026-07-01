@@ -77,13 +77,19 @@ def zeige_elster_zeile(zeilen_nr: str, bezeichnung: str, wert: float):
 
 def zeige_logo():
     """Logo anzeigen falls vorhanden, sonst Textfallback."""
-    logo_pfad = Path('talKIT logo gruen.png')
-    if logo_pfad.exists():
+    basis = Path(__file__).parent
+    kandidaten = [
+        basis / 'talKITlogogruen.png',
+        basis / 'talKIT logo gruen.png',
+        basis / 'assets' / 'talKITlogogruen.png',
+    ]
+    logo_pfad = next((p for p in kandidaten if p.exists()), None)
+    if logo_pfad:
         with open(logo_pfad, 'rb') as f:
             data = base64.b64encode(f.read()).decode()
         st.markdown(
             f'<img src="data:image/png;base64,{data}" '
-            f'style="height:40px; margin-bottom:8px;" alt="talKIT">',
+            f'style="height:36px; margin-bottom:4px;" alt="talKIT">',
             unsafe_allow_html=True
         )
     else:
@@ -92,7 +98,8 @@ def zeige_logo():
 
 def neue_datei_button():
     """Setzt den Session State zurück und löst einen Rerun aus."""
-    if st.button('🔄 Neue Datei wählen', type='secondary'):
+    if st.button('Neue Datei wählen', type='secondary', key='neue_datei'):
+        st.cache_data.clear()
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
@@ -175,9 +182,10 @@ if hat_fehler or hat_andere:
                 st.session_state['fehler_bestaetigt'] = True
                 st.rerun()
         with col2:
-            # Neue Datei wählen: File-Uploader zurücksetzen
-            if st.button('🔄 Neue Datei wählen', type='primary'):
-                st.session_state['fehler_bestaetigt'] = False
+            if st.button('Neue Datei wählen', type='primary', key='neue_datei_fehler'):
+                st.cache_data.clear()
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
                 st.rerun()
 
         if not st.session_state.get('fehler_bestaetigt', False):
