@@ -112,7 +112,7 @@ zeige_logo()
 st.title('Steuermodul')
 st.caption(
     'Vorbereitung der Steuerunterlagen auf Basis des Podio-Exports · '
-    '[Dokumentation & Anleitung](https://github.com/talkit-ev/talkit-steuer#readme)'
+    '[Dokumentation & Anleitung](https://github.com/LuxDei10/talKIT-Steuer)'
 )
 
 st.divider()
