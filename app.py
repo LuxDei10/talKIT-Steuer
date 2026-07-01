@@ -238,11 +238,8 @@ if hat_probleme:
         noch_fehlend = [k for k, v in neues_mapping.items() if v is None]
         if noch_fehlend:
             st.error(
-                'Folgende Pflicht-Spalten sind noch nicht zugeordnet:
-
-' +
-                '
-'.join(f'- `{s}`' for s in noch_fehlend)
+                'Folgende Pflicht-Spalten sind noch nicht zugeordnet:\n\n' +
+                '\n'.join(f'- `{s}`' for s in noch_fehlend)
             )
             neue_datei_button()
             st.stop()
