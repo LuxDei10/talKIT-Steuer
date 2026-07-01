@@ -144,6 +144,22 @@ with st.spinner('Datei wird eingelesen …'):
             neue_datei_button()
             st.stop()
         df_roh = pd.read_excel(xls, sheet_name=xls.sheet_names[0])
+
+        # Unnamed-Spalten (ohne Kopfzeile) in lesbare Excel-Spaltennamen umwandeln
+        # "Unnamed: 0" → "Spalte A", "Unnamed: 3" → "Spalte D" etc.
+        def idx_zu_excel_spalte(n: int) -> str:
+            """Wandelt 0-basierten Index in Excel-Spaltenbezeichnung um (0→A, 25→Z, 26→AA)."""
+            name = ''
+            n += 1  # 1-basiert für die Berechnung
+            while n > 0:
+                n, rest = divmod(n - 1, 26)
+                name = chr(65 + rest) + name
+            return name
+
+        df_roh.columns = [
+            f'Spalte {idx_zu_excel_spalte(i)}' if str(c).startswith('Unnamed:') else c
+            for i, c in enumerate(df_roh.columns)
+        ]
     except Exception as e:
         st.error(f'Datei konnte nicht eingelesen werden: {e}')
         neue_datei_button()
