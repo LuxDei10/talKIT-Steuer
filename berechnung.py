@@ -131,6 +131,49 @@ def erkenne_zeitraeume(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── 2. DATENVORBEREITUNG ──────────────────────────────────────────────────────
 
+def _parse_datum(series: pd.Series) -> pd.Series:
+    """
+    Robuste Datumsverarbeitung für Podio-Exporte.
+
+    Podio kann Daten je nach Browser/Exporteinstellung unterschiedlich
+    formatieren. Diese Funktion versucht mehrere Formate und gibt NaT
+    zurück wo kein Format passt.
+
+    Besonderheit: Amerikanisches Format (MM/DD/YYYY) wird nur als letzten
+    Fallback versucht und nur wenn kein deutsches Format passt.
+    Damit wird verhindert dass "01.02.2026" (1. Februar) als
+    "2. Januar" interpretiert wird.
+    """
+    # Erster Versuch: pd.to_datetime ohne Format – erkennt ISO und Excel-Zahlen
+    result = pd.to_datetime(series, errors='coerce', dayfirst=True)
+
+    # Für verbleibende NaT: explizite Formate in sicherer Reihenfolge
+    # Deutsches Format zuerst – verhindert amerikanische Fehlinterpretation
+    formate_sicher = [
+        '%d.%m.%Y',   # 28.01.2026
+        '%d.%m.%y',   # 28.01.26
+        '%d/%m/%Y',   # 28/01/2026
+        '%Y-%m-%d',   # 2026-01-28 (ISO)
+    ]
+    # Amerikanisches Format nur als letzter Ausweg – potenziell mehrdeutig
+    formate_mehrdeutig = ['%m/%d/%Y']
+
+    for fmt_liste in [formate_sicher, formate_mehrdeutig]:
+        mask_nat = result.isna()
+        if not mask_nat.any():
+            break
+        for fmt in fmt_liste:
+            noch_nat = result.isna()
+            if not noch_nat.any():
+                break
+            versuch = pd.to_datetime(
+                series[noch_nat], format=fmt, errors='coerce'
+            )
+            result[noch_nat] = versuch
+
+    return result
+
+
 def bereite_daten_vor(df: pd.DataFrame) -> pd.DataFrame:
     """
     Bereitet den Podio-Export für Berechnungen vor:
@@ -143,9 +186,9 @@ def bereite_daten_vor(df: pd.DataFrame) -> pd.DataFrame:
     spalten = PFLICHT_SPALTEN + [s for s in OPTIONALE_SPALTEN if s in df.columns]
     df = df[spalten].copy()
 
-    # Datumsfelder
-    df['Rechnungsdatum'] = pd.to_datetime(df['Rechnungsdatum'], errors='coerce')
-    df['Überweisungsdatum'] = pd.to_datetime(df['Überweisungsdatum'], errors='coerce')
+    # Datumsfelder – robuste Verarbeitung mehrerer Formate
+    for datumsspalte in ['Rechnungsdatum', 'Überweisungsdatum']:
+        df[datumsspalte] = _parse_datum(df[datumsspalte])
 
     # Betragsfelder numerisch
     betragsspalten = [

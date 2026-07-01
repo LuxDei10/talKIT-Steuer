@@ -7,6 +7,7 @@ Streamlit-Oberfläche für die Steuervorbereitung.
 import streamlit as st
 import pandas as pd
 import base64
+import difflib
 from pathlib import Path
 from berechnung import (
     pruefe_spalten, pruefe_mwst_konsistenz, erkenne_zeitraeume,
@@ -148,16 +149,118 @@ with st.spinner('Datei wird eingelesen …'):
         neue_datei_button()
         st.stop()
 
-# Spaltenprüfung
-fehlende = pruefe_spalten(df_roh)
-if fehlende:
-    st.error(
-        'Die folgenden Pflicht-Spalten fehlen in der Datei. '
-        'Bitte prüfe den Podio-Export:\n\n' +
-        '\n'.join(f'- `{s}`' for s in fehlende)
+# ── SPALTEN-MATCHING ─────────────────────────────────────────────────────────
+
+def matche_spalten(
+    vorhandene: list[str],
+    pflicht: list[str],
+    schwelle: float = 0.75
+) -> dict[str, str | None]:
+    """
+    Versucht Pflicht-Spalten auf vorhandene Spalten zu matchen.
+    Reihenfolge: exakt → exakt lowercase → Ähnlichkeit (difflib).
+    Gibt dict zurück: {pflicht_spalte: gefundene_spalte | None}
+    """
+    vorhandene_lower = {s.lower(): s for s in vorhandene}
+    mapping = {}
+    for pflicht_spalte in pflicht:
+        # 1. Exakter Match
+        if pflicht_spalte in vorhandene:
+            mapping[pflicht_spalte] = pflicht_spalte
+            continue
+        # 2. Case-insensitiver Match
+        if pflicht_spalte.lower() in vorhandene_lower:
+            mapping[pflicht_spalte] = vorhandene_lower[pflicht_spalte.lower()]
+            continue
+        # 3. Ähnlichkeitssuche
+        treffer = difflib.get_close_matches(
+            pflicht_spalte, vorhandene, n=1, cutoff=schwelle
+        )
+        mapping[pflicht_spalte] = treffer[0] if treffer else None
+    return mapping
+
+from berechnung import PFLICHT_SPALTEN as _PFLICHT
+
+vorhandene_spalten = list(df_roh.columns)
+mapping = matche_spalten(vorhandene_spalten, _PFLICHT)
+
+exakt    = {k: v for k, v in mapping.items() if v == k}
+aehnlich = {k: v for k, v in mapping.items() if v is not None and v != k}
+fehlend  = {k: v for k, v in mapping.items() if v is None}
+
+# Mapping-Korrekturen aus Session State übernehmen
+if 'spalten_mapping' not in st.session_state:
+    st.session_state['spalten_mapping'] = {**exakt, **aehnlich}
+
+hat_probleme = bool(aehnlich or fehlend)
+
+if hat_probleme:
+    st.warning(
+        f'Spalten-Zuordnung: {len(exakt)} eindeutig · '
+        f'{len(aehnlich)} unsicher · {len(fehlend)} nicht gefunden'
     )
-    neue_datei_button()
-    st.stop()
+    with st.expander('Spalten-Zuordnung prüfen und anpassen', expanded=True):
+        st.caption(
+            'Das System hat versucht, die Spalten automatisch zuzuordnen. '
+            'Bitte prüfe unsichere Zuordnungen und ergänze fehlende Spalten.'
+        )
+
+        neues_mapping = dict(st.session_state['spalten_mapping'])
+
+        if aehnlich:
+            st.markdown('**Unsichere Zuordnungen – bitte bestätigen oder korrigieren:**')
+            for pflicht_sp, gefunden in aehnlich.items():
+                optionen = ['– nicht vorhanden –'] + vorhandene_spalten
+                default = optionen.index(gefunden) if gefunden in optionen else 0
+                auswahl = st.selectbox(
+                    f'`{pflicht_sp}`',
+                    options=optionen,
+                    index=default,
+                    key=f'match_{pflicht_sp}',
+                    help=f'Automatisch zugeordnet zu: {gefunden}'
+                )
+                neues_mapping[pflicht_sp] = None if auswahl == '– nicht vorhanden –' else auswahl
+
+        if fehlend:
+            st.markdown('**Nicht gefundene Spalten – bitte manuell zuordnen:**')
+            for pflicht_sp in fehlend:
+                optionen = ['– nicht vorhanden –'] + vorhandene_spalten
+                auswahl = st.selectbox(
+                    f'`{pflicht_sp}`',
+                    options=optionen,
+                    index=0,
+                    key=f'match_{pflicht_sp}',
+                )
+                neues_mapping[pflicht_sp] = None if auswahl == '– nicht vorhanden –' else auswahl
+
+        st.session_state['spalten_mapping'] = neues_mapping
+
+        noch_fehlend = [k for k, v in neues_mapping.items() if v is None]
+        if noch_fehlend:
+            st.error(
+                'Folgende Pflicht-Spalten sind noch nicht zugeordnet:
+
+' +
+                '
+'.join(f'- `{s}`' for s in noch_fehlend)
+            )
+            neue_datei_button()
+            st.stop()
+        else:
+            if st.button('Zuordnung bestätigen', type='primary'):
+                st.session_state['mapping_bestaetigt'] = True
+                st.rerun()
+            if not st.session_state.get('mapping_bestaetigt', False):
+                st.stop()
+
+    # DataFrame umbenennen nach bestätigtem Mapping
+    umbenennungen = {
+        v: k for k, v in st.session_state['spalten_mapping'].items() if v != k
+    }
+    if umbenennungen:
+        df_roh = df_roh.rename(columns=umbenennungen)
+else:
+    st.session_state['mapping_bestaetigt'] = True
 
 # MwSt-Konsistenzprüfung
 fehler_df, andere_df = pruefe_mwst_konsistenz(df_roh)
