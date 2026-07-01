@@ -274,45 +274,11 @@ def exportiere_jahressteuer(eur: dict, ust: dict, kst_gewst: dict) -> bytes:
     s = _styles()
     e = [_header(str(eur['jahr']), f'Jahressteuererklärung {eur["jahr"]}', s)]
 
-    # ── EÜR ──
-    eur_inhalt = []
-    if eur.get('ohne_ueberweisung_ausgeschlossen', 0) > 0:
-        eur_inhalt.append(Paragraph(
-            f'Hinweis: {eur["ohne_ueberweisung_ausgeschlossen"]} GV(s) ohne '
-            f'Überweisungsdatum wurden nicht berücksichtigt.', s['hinweis']
-        ))
-    eur_inhalt += [
-        Paragraph('Betriebseinnahmen – wirtschaftlicher Geschäftsbetrieb (D)', s['label']),
-        _tabelle([
-            ('Steuerpflichtige Betriebseinnahmen (Netto)',
-             f'{eur["zeile_15_betriebseinnahmen_netto"]:,.2f} €', 15),
-            ('Vereinnahmte Umsatzsteuer',
-             f'{eur["zeile_17_vereinnahmte_ust"]:,.2f} €', 17),
-            ('Steuerfreie / nicht steuerbare Einnahmen (Sphären A+C)',
-             f'{eur["zeile_21_steuerfreie_einnahmen"]:,.2f} €', 21),
-        ], s),
-        Spacer(1, 3 * mm),
-        Paragraph('Betriebsausgaben – wirtschaftlicher Geschäftsbetrieb (D)', s['label']),
-        _tabelle([
-            ('Sonstige Betriebsausgaben (Netto)',
-             f'{eur["zeile_46_betriebsausgaben_netto"]:,.2f} €', 46),
-            ('Gezahlte Vorsteuerbeträge',
-             f'{eur["zeile_48_vorsteuer"]:,.2f} €', 48),
-        ], s),
-        Spacer(1, 4 * mm),
-    ]
-    gewinn = eur['gewinn_verlust_d']
-    farbe_g = FARBE_OK if gewinn >= 0 else FARBE_FEHLER
-    eur_inhalt.append(Paragraph(
-        f'<b>Gewinn / Verlust Sphäre D (Zeile 75):</b> '
-        f'<font color="{farbe_g.hexval()}">{gewinn:,.2f} €</font>',
-        s['normal']
-    ))
-    e.append(_abschnitt('Anlage EÜR – Einnahmenüberschussrechnung', eur_inhalt, s))
-
-    # ── USt Jahres ──
+    # ── 1. USt-Jahreserklärung (zuerst – EÜR baut auf USt auf) ─────────────────
     e.append(_abschnitt('Umsatzsteuer-Jahreserklärung (USt 2)', [
-        Paragraph('Jahressummen – Basis Rechnungsdatum', s['label']),
+        Paragraph(
+            'Jahressummen – Basis Rechnungsdatum (Sollversteuerung, §16 Abs. 1 UStG)',
+            s['label']),
         _tabelle([
             ('Netto-Umsatz 19 %',
              f'{ust["zeile_13_netto_19"]:,.2f} €', 13),
@@ -327,10 +293,9 @@ def exportiere_jahressteuer(eur: dict, ust: dict, kst_gewst: dict) -> bytes:
         ], s),
     ], s))
 
-    # Quartalskontrolle
+    # Quartalskontrolle – reduziertes Design, integriert in Textfluss
     nachz = ust['nachzahlung_erstattung']
-    header_q = [['Quartal', 'Daten', 'Zahllast\nberechnet',
-                 'Vorauszahlung\ngeleistet', 'Differenz']]
+    header_q = [['Quartal', 'Daten', 'Zahllast', 'Vorauszahlung', 'Differenz']]
     q_rows = []
     for q in [1, 2, 3, 4]:
         q_erg = ust['quartalsergebnisse'].get(q)
@@ -352,14 +317,16 @@ def exportiere_jahressteuer(eur: dict, ust: dict, kst_gewst: dict) -> bytes:
              SEITENBREITE * 0.25, SEITENBREITE * 0.28, SEITENBREITE * 0.27]
     q_tab = Table(header_q + q_rows + [summen], colWidths=col_b)
     q_tab.setStyle(TableStyle([
-        ('BACKGROUND',    (0, 0), (-1, 0),  FARBE_DUNKEL),
+        ('BACKGROUND',    (0, 0), (-1, 0),  FARBE_AKZENT),
         ('TEXTCOLOR',     (0, 0), (-1, 0),  FARBE_WEISS),
         ('FONTNAME',      (0, 0), (-1, 0),  'Helvetica-Bold'),
         ('FONTSIZE',      (0, 0), (-1, -1), 8),
         ('ROWBACKGROUNDS',(0, 1), (-1, -2), [FARBE_WEISS, FARBE_HELL]),
-        ('BACKGROUND',    (0, -1),(-1, -1), FARBE_HELL),
+        ('BACKGROUND',    (0, -1),(-1, -1), colors.HexColor('#E8EEF6')),
         ('FONTNAME',      (0, -1),(-1, -1), 'Helvetica-Bold'),
-        ('GRID',          (0, 0), (-1, -1), 0.3, FARBE_LINIE),
+        ('LINEBELOW',     (0, 0), (-1, 0),  0.5, FARBE_AKZENT),
+        ('LINEBELOW',     (0, -2),(-1, -2), 0.8, FARBE_LINIE),
+        ('LINEBELOW',     (0, -1),(-1, -1), 0.3, FARBE_LINIE),
         ('ALIGN',         (1, 0), (-1, -1), 'RIGHT'),
         ('ALIGN',         (0, 0), (0, -1),  'CENTER'),
         ('LEFTPADDING',   (0, 0), (-1, -1), PAD_H),
@@ -381,6 +348,50 @@ def exportiere_jahressteuer(eur: dict, ust: dict, kst_gewst: dict) -> bytes:
         Paragraph(nachz_text, s['normal']),
     ]))
 
+    # ── 2. EÜR (baut auf USt auf, Basis Überweisungsdatum §11 EStG) ──────────
+    eur_inhalt = []
+    if eur.get('ohne_ueberweisung_ausgeschlossen', 0) > 0:
+        eur_inhalt.append(Paragraph(
+            f'Hinweis: {eur["ohne_ueberweisung_ausgeschlossen"]} GV(s) ohne '
+            f'Überweisungsdatum wurden nicht berücksichtigt '
+            f'(Zufluss-Abfluss-Prinzip, §11 EStG).', s['hinweis']
+        ))
+    eur_inhalt += [
+        Paragraph('Betriebseinnahmen – wirtschaftlicher Geschäftsbetrieb (D)',
+                  s['label']),
+        _tabelle([
+            ('Steuerpflichtige Betriebseinnahmen (Netto)',
+             f'{eur["zeile_15_betriebseinnahmen_netto"]:,.2f} €', 15),
+            ('Vereinnahmte Umsatzsteuer',
+             f'{eur["zeile_17_vereinnahmte_ust"]:,.2f} €', 17),
+        ], s),
+        Spacer(1, 2 * mm),
+        Paragraph(
+            'Gesamteinnahmen (A + C) – steuerfreie / nicht steuerbare Einnahmen',
+            s['label']),
+        _tabelle([
+            ('Mitgliedsbeiträge, Spenden, Zweckbetriebseinnahmen (nicht KSt/GewSt-relevant)',
+             f'{eur["zeile_21_steuerfreie_einnahmen"]:,.2f} €', 21),
+        ], s),
+        Spacer(1, 3 * mm),
+        Paragraph('Betriebsausgaben – wirtschaftlicher Geschäftsbetrieb (D)',
+                  s['label']),
+        _tabelle([
+            ('Sonstige Betriebsausgaben (Netto)',
+             f'{eur["zeile_46_betriebsausgaben_netto"]:,.2f} €', 46),
+            ('Gezahlte Vorsteuerbeträge',
+             f'{eur["zeile_48_vorsteuer"]:,.2f} €', 48),
+        ], s),
+        Spacer(1, 4 * mm),
+    ]
+    gewinn = eur['gewinn_verlust_d']
+    farbe_g = FARBE_OK if gewinn >= 0 else FARBE_FEHLER
+    eur_inhalt.append(Paragraph(
+        f'<b>Gewinn / Verlust Sphäre D (Zeile 75):</b> '
+        f'<font color="{farbe_g.hexval()}">{gewinn:,.2f} €</font>',
+        s['normal']
+    ))
+    e.append(_abschnitt('Anlage EÜR – Einnahmenüberschussrechnung', eur_inhalt, s))
     # ── KSt + GewSt ──
     kst_inhalt = [
         Paragraph('Sphäre D – wirtschaftlicher Geschäftsbetrieb', s['label']),
