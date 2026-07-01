@@ -110,7 +110,10 @@ def neue_datei_button():
 
 zeige_logo()
 st.title('Steuermodul')
-st.caption('Vorbereitung der Steuerunterlagen auf Basis des Podio-Exports')
+st.caption(
+    'Vorbereitung der Steuerunterlagen auf Basis des Podio-Exports · '
+    '[Dokumentation & Anleitung](https://github.com/talkit-ev/talkit-steuer#readme)'
+)
 
 st.divider()
 

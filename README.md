@@ -2,26 +2,31 @@
 
 Dieses Tool unterstützt das Finanzteam von talKIT e.V. bei der Vorbereitung der Steuerunterlagen auf Basis des Podio-Exports. Es berechnet alle relevanten Werte für die Elster-Formulare und gibt sie als strukturiertes PDF aus.
 
+> Nur für das Finanzteam von talKIT e.V. – Zugang über Streamlit Viewer Authentication.
+
 ---
 
 ## Funktionsumfang
 
-| Steuerart | Formular | Basis |
+| Steuerart | Elster-Formular | Datumsbasis |
 |---|---|---|
-| USt-Voranmeldung (quartalsweise) | USt 1 A | Rechnungsdatum |
+| USt-Voranmeldung (quartalsweise) | USt 1 A | Rechnungsdatum (Sollversteuerung, §16 Abs. 1 UStG) |
 | USt-Jahreserklärung | USt 2 | Rechnungsdatum |
-| Einnahmenüberschussrechnung | Anlage EÜR | Überweisungsdatum |
+| Einnahmenüberschussrechnung | Anlage EÜR | Überweisungsdatum (Zufluss-Abfluss, §11 EStG) |
 | Körperschaftsteuer | KSt 1 | EÜR-Ergebnis Sphäre D |
 | Gewerbesteuer | GewSt 1 B | EÜR-Ergebnis Sphäre D |
 
-Zusätzlich wird bei jedem Start eine **MwSt-Konsistenzprüfung** durchgeführt, die Eingabefehler im Podio-Export erkennt, bevor sie in die Berechnung einfließen.
+Bei jedem Upload werden außerdem automatisch durchgeführt:
+- Spalten-Matching mit manueller Korrekturoption
+- MwSt-Konsistenzprüfung (Brutto gegen Netto-Felder)
+- Zeitraumerkennung mit Vollständigkeitsprüfung
 
 ---
 
 ## Voraussetzungen
 
 - Python 3.10 oder neuer
-- Die Pakete aus `requirements.txt`
+- Pakete aus `requirements.txt`
 
 ```bash
 pip install -r requirements.txt
@@ -42,49 +47,52 @@ Der Browser öffnet sich automatisch auf `http://localhost:8501`.
 ## Deployment (Streamlit Community Cloud)
 
 1. Repository auf GitHub als **public** anlegen
-2. Alle Dateien pushen – **keine Excel-Dateien** (sind in `.gitignore` ausgeschlossen)
-3. Auf [share.streamlit.io](https://share.streamlit.io) mit GitHub einloggen
+2. Alle Dateien pushen – **keine Excel-Dateien** (`.gitignore` schützt davor)
+3. Auf [share.streamlit.io](https://share.streamlit.io) mit GitHub-Account einloggen
 4. „New app" → Repository auswählen → `app.py` als Einstiegspunkt → Deploy
-5. Unter **Settings → Sharing** die E-Mail-Adressen des Finanzteams als Viewer eintragen
+5. Unter **Settings → Sharing** die E-Mail-Adressen des Finanzteams eintragen
 
 Die App aktualisiert sich automatisch bei jedem `git push`.
 
-> ⚠️ Die App-URL ist prinzipiell öffentlich erreichbar. Durch die Viewer-Authentication unter Streamlit Cloud Settings sind nur eingetragene E-Mail-Adressen zugelassen. Podio-Exportdateien dürfen **niemals** ins Repository gepusht werden.
+> ⚠️ Podio-Exportdateien dürfen **niemals** ins Repository gepusht werden. Die `.gitignore` schließt `.xlsx`-Dateien aus – trotzdem vor jedem Commit prüfen.
 
 ---
 
-## Benutzung
+## Podio-Export vorbereiten
 
-### Podio-Export vorbereiten
+Export nach **Rechnungsdatum** filtern – das Modul übernimmt die interne Filterung nach Überweisungsdatum für die EÜR. Ein Jahresexport (alle GVs mit Rechnungsdatum im Steuerjahr) deckt alle Berechnungen ab.
 
-In Podio die Buchhaltungs-App als Excel exportieren. Die Datei muss **genau ein Tabellenblatt** enthalten und folgende Spalten aufweisen:
+Die Datei muss **genau ein Tabellenblatt** enthalten. Folgende Spalten werden benötigt:
 
 | Spalte | Beschreibung |
 |---|---|
-| `Einmalige ID` | Eindeutige GV-Kennung (z.B. `TK003190`) |
-| `Buchung ext.` | Externe Buchungsnummer (z.B. `26.C1.A05 IT-Infrastruktur`) |
-| `Rechnungsdatum` | Datum der Rechnung (Basis USt) |
+| `Einmalige ID` | Eindeutige GV-Kennung, z.B. `TK003190` |
+| `Buchung ext.` | Externe Buchungsnummer, z.B. `26.C1.A05 IT-Infrastruktur` |
+| `Rechnungsdatum` | Datum der Rechnung (Basis USt-Voranmeldung) |
 | `Überweisungsdatum` | Datum der Überweisung (Basis EÜR) |
 | `Typ` | `Einnahme` oder `Ausgabe` |
 | `Brutto-Betrag` | Gesamtbetrag inkl. MwSt |
-| `Netto-Betrag 19% MwSt` | Nettobetrag des 19%-Anteils |
-| `Netto-Betrag 7% MwSt` | Nettobetrag des 7%-Anteils |
+| `Netto-Betrag 19% MwSt` | Nettobetrag des 19 %-Anteils |
+| `Netto-Betrag 7% MwSt` | Nettobetrag des 7 %-Anteils |
 | `Netto-Betrag anderer MwSt Satz` | Nettobetrag bei abweichendem Steuersatz |
-| `Summe Netto` | Gesamtnettobetrag (automatisch in Podio berechnet) |
+| `Summe Netto` | Gesamtnettobetrag (wird in Podio automatisch berechnet) |
 
 Optionale Spalten: `Titel`, `Konto`
 
-### Ablauf in der App
+Das Modul erkennt umbenannte Spalten automatisch per Ähnlichkeitssuche und bietet eine manuelle Korrekturoption an.
 
-1. Excel-Datei hochladen
-2. Automatische Validierung abwarten – Fehler werden mit der `Einmaligen ID` ausgewiesen
-3. Steuerart wählen (Voranmeldung oder Jahressteuer)
-4. Zeitraum wählen – die App macht Vorschläge basierend auf den Daten
-5. Bei Jahressteuer: geleistete Vorauszahlungen eintragen
-   - Positiver Wert = Zahlung ans Finanzamt
-   - Negativer Wert = Rückzahlung vom Finanzamt
-6. Berechnung starten
-7. PDF exportieren und neben das Elster-Formular legen
+---
+
+## Ablauf in der App
+
+1. **Excel hochladen** – Podio-Export per Drag & Drop
+2. **Spalten prüfen** – automatische Zuordnung wird angezeigt, bei Abweichungen manuell korrigieren
+3. **MwSt-Check** – inkonsistente GVs werden mit `Einmaliger ID` gemeldet; Fehler in Podio korrigieren oder trotzdem fortfahren
+4. **Steuerart wählen** – Voranmeldung (Quartal) oder Jahressteuererklärung
+5. **Zeitraum wählen** – App macht Vorschlag basierend auf Buchungsdichte
+6. **Vorauszahlungen eingeben** (nur Jahressteuer) – Werte aus den Elster-Bestätigungen der vier Quartale; positiv = Zahlung ans FA, negativ = Rückerstattung
+7. **Berechnen** – Ergebnisse erscheinen direkt in der App
+8. **PDF exportieren** – neben das Elster-Formular legen und Werte übertragen
 
 ---
 
@@ -92,12 +100,13 @@ Optionale Spalten: `Titel`, `Konto`
 
 ```
 talkit-steuer/
-├── app.py              # Streamlit-Oberfläche
-├── berechnung.py       # Alle Berechnungsfunktionen
-├── export.py           # PDF-Erzeugung
-├── requirements.txt    # Python-Abhängigkeiten
-├── .gitignore          # Schützt Finanzdaten vor versehentlichem Push
-└── README.md           # Diese Datei
+├── app.py                  # Streamlit-Oberfläche
+├── berechnung.py           # Berechnungslogik (Validierung, USt, EÜR, KSt, GewSt)
+├── export.py               # PDF-Erzeugung (ReportLab)
+├── requirements.txt        # Python-Abhängigkeiten
+├── .gitignore              # Schützt Finanzdaten vor versehentlichem Push
+├── README.md               # Diese Datei
+└── PODIO_OPTIMIERUNG.md    # Verbesserungsvorschläge für das Podio-Buchungssystem
 ```
 
 ---
@@ -106,73 +115,98 @@ talkit-steuer/
 
 ### Sphärenzuordnung
 
-Der Verein ist in drei steuerrelevante Bereiche aufgeteilt, die sich aus der externen Buchungsnummer ergeben (zweites Segment nach dem ersten Punkt):
+Die Sphäre wird automatisch aus der externen Buchungsnummer extrahiert (zweites Segment nach dem ersten Punkt, z.B. `26.C1.A05` → Sphäre C):
 
-| Sphäre | Kürzel | Inhalt | USt | KSt/GewSt |
-|---|---|---|---|---|
-| Ideeller Bereich | `A` | Mitgliedsbeiträge, Spenden, Verwaltung | nicht steuerbar | nein |
-| Zweckbetrieb | `C` | Technologie-Events (Satzungszweck) | steuerpflichtig | nein |
-| Wirtsch. Geschäftsbetrieb | `D` | Sponsoring, Merch, Getränke | steuerpflichtig | ja, wenn Freigrenze überschritten |
+| Sphäre | Inhalt | USt-pflichtig | KSt / GewSt |
+|---|---|---|---|
+| A – Ideeller Bereich | Mitgliedsbeiträge, Spenden, Verwaltung | Nein | Nein |
+| C – Zweckbetrieb | Technologie-Events (Satzungszweck) | Ja | Nein |
+| D – Wirtsch. Geschäftsbetrieb | Sponsoring, Merch, Getränke | Ja | Ja, wenn Freigrenze überschritten |
 
-> Bereich B (Vermögensverwaltung) wird vom Verein nicht genutzt.
+Bereich B (Vermögensverwaltung) wird nicht genutzt.
 
 ### Vorsteuerabzug
 
-- Sphäre **A**: nicht vorsteuerabzugsberechtigt (§ 15 Abs. 2 UStG)
-- Sphäre **C**: 90 % vorsteuerabzugsberechtigt (Vereinbarung mit dem Finanzamt)
-- Sphäre **D**: 100 % vorsteuerabzugsberechtigt
+| Sphäre | Abzugsberechtigt | Grundlage |
+|---|---|---|
+| A | 0 % | §15 Abs. 2 UStG |
+| C | 90 % | Vereinbarung mit dem Finanzamt Karlsruhe |
+| D | 100 % | §15 Abs. 1 UStG |
 
-### Freigrenze wirtschaftlicher Geschäftsbetrieb (§ 64 Abs. 3 AO)
+### Freigrenze wirtschaftlicher Geschäftsbetrieb
 
 | Steuerjahr | Freigrenze (Brutto-Einnahmen D) |
 |---|---|
 | bis 2025 | 45.000 € |
 | ab 2026 | 50.000 € |
 
-Wird die Freigrenze überschritten, gilt ein Freibetrag von 5.000 € auf den Gewinn. Erst darüber fallen KSt und GewSt an.
+Bei Überschreitung gilt ein zusätzlicher Freibetrag von 5.000 € auf den Gewinn (§64 Abs. 3 AO). Erst darüber fallen KSt (15 % + 5,5 % SolZ) und GewSt an.
 
 ### Gewerbesteuer Karlsruhe
 
-Hebesatz: **450 %** (Stand 2026) · Steuermesszahl: **3,5 %** (bundeseinheitlich)
+Hebesatz **450 %** (Stand 2026) · Steuermesszahl **3,5 %** (bundeseinheitlich)
 
 ---
 
 ## Konfiguration
 
-Steuerrelevante Parameter sind am Anfang von `berechnung.py` als Konstanten hinterlegt und können dort jährlich aktualisiert werden:
+Steuerrelevante Parameter stehen am Anfang von `berechnung.py` und müssen jährlich geprüft werden:
 
 ```python
-GEWST_HEBESATZ     = 4.50    # 450 % Karlsruhe
-VORSTEUER_ABSCHLAG_C = 0.90  # 90 % laut Vereinbarung Finanzamt
+GEWST_HEBESATZ       = 4.50   # 450 % – Hebesatz Karlsruhe, jährlich prüfen
+VORSTEUER_ABSCHLAG_C = 0.90   # 90 % – laut Vereinbarung Finanzamt
 ```
 
-Die Freigrenze ist jahresabhängig in der Funktion `freigrenze(jahr)` hinterlegt.
+Die Freigrenze ist jahresabhängig in `freigrenze(jahr)` hinterlegt und muss nur bei gesetzlichen Änderungen angepasst werden.
 
 ---
 
 ## Bekannte Einschränkungen
 
-- **Negativbeträge (PayPal-Gebühren):** Korrekturbuchungen mit negativem Vorzeichen unter einer Einnahme-Buchungsnummer sind eine Übergangslösung und sollten in einer späteren Überarbeitung des Buchungssystems durch eine eigene Buchungsnummer ersetzt werden.
-- **Andere Steuersätze:** GVs im Feld `Netto-Betrag anderer MwSt Satz` können vom MwSt-Check nicht automatisch verifiziert werden und werden zur manuellen Prüfung ausgegeben.
-- **Abschreibungen:** Das Modul setzt voraus, dass alle Anschaffungen sofort als Aufwand verbucht werden (keine AfA-Tabelle).
-- **Vorauszahlungen:** Die tatsächlich geleisteten USt-Vorauszahlungen müssen manuell eingegeben werden, da sie im Podio-Export nicht eindeutig als separate Felder vorliegen.
+| Einschränkung | Ursache | Workaround |
+|---|---|---|
+| Negativbeträge (PayPal-Gebühren) | Podio hat keine eigene Buchungsnummer für Abzüge | Betrag negativ unter Einnahme-BN eintragen; Modul behandelt das korrekt |
+| Andere Steuersätze nicht prüfbar | Steuersatz unbekannt, daher kein Soll-Brutto berechenbar | Modul listet betroffene GVs zur manuellen Prüfung auf |
+| Vorauszahlungen manuell | Steuerzahlungen in Podio nicht maschinenlesbar getrennt | Werte aus Elster-Bestätigungen manuell eingeben |
+| Gemischte Aufwendungen nicht aufteilbar | Buchungssystem unterstützt keine anteilige Sphärenzuordnung | GV vollständig einer Sphäre zuordnen; Pauschalvereinbarung mit FA gilt für C |
+
+Weitere Verbesserungsvorschläge für das Podio-System: [`PODIO_OPTIMIERUNG.md`](PODIO_OPTIMIERUNG.md)
 
 ---
 
 ## Wartung & Übergabe
 
-### Jährliche Aufgaben
+### Jährliche Checkliste
 
-- [ ] Hebesatz Karlsruhe prüfen und ggf. in `berechnung.py` aktualisieren
-- [ ] Freigrenze prüfen (in `berechnung.py` → Funktion `freigrenze()`)
-- [ ] Streamlit Viewer Authentication: E-Mail des neuen Finanzteams eintragen, altes Team entfernen
+- [ ] `GEWST_HEBESATZ` in `berechnung.py` prüfen (Karlsruhe veröffentlicht Änderungen im Herbst)
+- [ ] `freigrenze()` in `berechnung.py` prüfen (gesetzliche Änderungen)
+- [ ] Streamlit Viewer Authentication: neue Finanzverantwortliche eintragen, ausgeschiedene entfernen
+- [ ] Erste Voranmeldung des neuen Jahres gegen Kontoauszug gegenchecken
+
+### Übergabe an neues Finanzteam
+
+Das Modul erfordert keine Programmierkenntnisse für die Nutzung. Für Wartung und Anpassungen:
+- GitHub-Zugang zum Repository
+- Grundlegendes Python-Verständnis (Konstanten ändern, Variablen lesen)
+- Streamlit-Account (Login via GitHub)
 
 ### Bei Änderungen am Podio-Buchungssystem
 
-Neue oder geänderte Buchungsnummern haben keinen Einfluss auf die Berechnung, solange das Format `XX.Sphäre.XXX Bezeichnung` beibehalten wird. Die Sphärenzuordnung (A/C/D) wird dynamisch aus der Buchungsnummer extrahiert.
+Das Format der Buchungsnummern (`XX.Sphäre.XXX Bezeichnung`) muss beibehalten werden – die Sphärenextraktion hängt davon ab. Neue Buchungsnummern innerhalb des bestehenden Schemas erfordern keine Code-Änderungen.
+
+---
+
+## Erstkalibrierung (vor dem ersten echten Einsatz)
+
+Vor der ersten echten Einreichung sollte das Modul gegen bekannte Werte geprüft werden:
+
+1. Einen abgeschlossenen Zeitraum exportieren für den eine Elster-Bestätigung vorliegt
+2. Voranmeldung mit dem Modul berechnen
+3. Ergebnis Zeile für Zeile mit der Elster-Bestätigung vergleichen
+4. Abweichungen dokumentieren und ursächlich klären
 
 ---
 
 ## Lizenz
 
-Internes Tool des talKIT e.V. – nicht zur Weitergabe bestimmt.
+MIT License – Copyright (c) 2026 talKIT e.V.
