@@ -9,12 +9,12 @@ from pathlib import Path
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
     HRFlowable, Image, KeepTogether
 )
-from reportlab.lib.enums import TA_RIGHT
+from reportlab.lib.enums import TA_RIGHT, TA_LEFT
 from reportlab.pdfgen import canvas as rl_canvas
 import io
 
@@ -28,111 +28,80 @@ FARBE_LINIE   = colors.HexColor('#D0D7E3')
 FARBE_FEHLER  = colors.HexColor('#D64045')
 FARBE_OK      = colors.HexColor('#2E7D52')
 
-SEITENBREITE  = A4[0] - 30 * mm   # nutzbare Breite bei je 15 mm Rand
-PAD_V         = 5                  # vertikales Zellen-Padding (pt)
-PAD_H         = 6                  # horizontales Zellen-Padding (pt)
+SEITENBREITE  = A4[0] - 30 * mm
+PAD_V         = 5
+PAD_H         = 6
 
 
-# ── SEITENNUMMERN ─────────────────────────────────────────────────────────────
+# ── SEITENNUMMERN (zuverlässiger Zähler) ──────────────────────────────────────
 
-class _SeitenNummernCanvas(rl_canvas.Canvas):
-    """Canvas-Subklasse: zeichnet 'Seite X von Y' nach dem Build."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._seiten = []
-
-    def showPage(self):
-        self._seiten.append(dict(self.__dict__))
-        self._startPage()
-
-    def save(self):
-        gesamt = len(self._seiten)
-        for zustand in self._seiten:
-            self.__dict__.update(zustand)
-            self._zeichne_fusszeile(gesamt)
-            super().showPage()
-        super().save()
-
-    def _zeichne_fusszeile(self, gesamt: int):
-        seite = self._seiten.index(dict(self.__dict__)) + 1 if dict(self.__dict__) in self._seiten else self._pageNumber
-        # Aktuelle Seitennummer aus dem Zustand lesen
-        seite = self._pageNumber
-        self.saveState()
-        self.setFont('Helvetica', 7)
-        self.setFillColor(colors.HexColor('#999999'))
-        text = f'Seite {seite} von {gesamt}'
-        self.drawRightString(A4[0] - 15 * mm, 8 * mm, text)
-        self.drawString(15 * mm, 8 * mm, 'talKIT e.V. · Steuermodul')
-        self.restoreState()
-
-
-class _SeitenNummernCanvasV2(rl_canvas.Canvas):
-    """Zuverlässige Zwei-Pass-Variante für 'Seite X von Y'."""
+class _SeitenCanvas(rl_canvas.Canvas):
+    """
+    Zwei-Pass-Canvas für 'Seite X von Y'.
+    Speichert jeden Seitenzustand als Snapshot, schreibt Fußzeilen im zweiten Pass.
+    Seitenzahl wird als einfacher Index gezählt – keine dict-Vergleiche.
+    """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._saved_page_states = []
+        self._snapshots = []
 
     def showPage(self):
-        self._saved_page_states.append(dict(self.__dict__))
+        # Zustand einfrieren: nur die Felder die für den zweiten Pass nötig sind
+        self._snapshots.append({
+            '_x': self._x, '_y': self._y,
+            '_fontname': self._fontname, '_fontsize': self._fontsize,
+            '_fillColorObj': self._fillColorObj,
+            '_strokeColorObj': self._strokeColorObj,
+            # Gesamter Zustand für korrekten Wiederaufbau
+            '_saved': dict(self.__dict__),
+        })
         self._startPage()
 
     def save(self):
-        num_pages = len(self._saved_page_states)
-        for state in self._saved_page_states:
-            self.__dict__.update(state)
-            self._draw_footer(num_pages)
+        gesamt = len(self._snapshots)
+        for i, snap in enumerate(self._snapshots):
+            self.__dict__.update(snap['_saved'])
+            self._fusszeile(seite=i + 1, gesamt=gesamt)
             rl_canvas.Canvas.showPage(self)
         rl_canvas.Canvas.save(self)
 
-    def _draw_footer(self, total: int):
-        page = self._saved_page_states.index(dict(self.__dict__)) + 1
+    def _fusszeile(self, seite: int, gesamt: int):
         self.saveState()
         self.setFont('Helvetica', 7)
-        self.setFillColor(colors.HexColor('#999999'))
-        self.drawRightString(A4[0] - 15 * mm, 8 * mm, f'Seite {page} von {total}')
+        self.setFillColor(colors.HexColor('#AAAAAA'))
         self.drawString(15 * mm, 8 * mm, 'talKIT e.V. · Steuermodul')
+        self.drawRightString(A4[0] - 15 * mm, 8 * mm, f'Seite {seite} von {gesamt}')
+        # dünne Trennlinie über Fußzeile
+        self.setStrokeColor(colors.HexColor('#DDDDDD'))
+        self.setLineWidth(0.3)
+        self.line(15 * mm, 12 * mm, A4[0] - 15 * mm, 12 * mm)
         self.restoreState()
 
 
 # ── LOGO ──────────────────────────────────────────────────────────────────────
 
-def _logo_element() -> Image | None:
-    """
-    Sucht das talKIT-Logo relativ zur export.py-Datei.
-    Unterstützt Dateinamen mit und ohne Leerzeichen.
-    """
+def _logo_pfad() -> Path | None:
     basis = Path(__file__).parent
-    kandidaten = [
-        basis / 'talKITlogogruen.png',
-        basis / 'talKIT logo gruen.png',
-        basis / 'assets' / 'talKITlogogruen.png',
-        basis / 'assets' / 'talKIT logo gruen.png',
-    ]
-    for p in kandidaten:
-        if p.exists():
-            hoehe = 11 * mm
-            breite = hoehe * (1722 / 510)
-            return Image(str(p), width=breite, height=hoehe)
+    for name in ['talKITlogogruen.png', 'talKIT logo gruen.png']:
+        for ordner in [basis, basis / 'assets']:
+            p = ordner / name
+            if p.exists():
+                return p
     return None
 
 
 # ── STYLES ────────────────────────────────────────────────────────────────────
 
-def _erstelle_styles() -> dict:
+def _styles() -> dict:
     return {
-        'verein': ParagraphStyle(
-            'TKVerein', fontName='Helvetica', fontSize=9,
-            textColor=colors.HexColor('#666688'), spaceAfter=0,
-        ),
         'titel': ParagraphStyle(
-            'TKTitel', fontName='Helvetica-Bold', fontSize=16,
-            textColor=FARBE_DUNKEL, spaceBefore=3 * mm, spaceAfter=2 * mm,
+            'TKTitel', fontName='Helvetica-Bold', fontSize=15,
+            textColor=FARBE_DUNKEL, spaceAfter=1 * mm, leading=18,
         ),
         'meta': ParagraphStyle(
-            'TKMeta', fontName='Helvetica', fontSize=9,
-            textColor=colors.HexColor('#666688'), spaceAfter=4 * mm,
+            'TKMeta', fontName='Helvetica', fontSize=8,
+            textColor=colors.HexColor('#888899'), spaceAfter=0, leading=11,
         ),
         'abschnitt': ParagraphStyle(
             'TKAbschnitt', fontName='Helvetica-Bold', fontSize=11,
@@ -158,66 +127,82 @@ def _erstelle_styles() -> dict:
     }
 
 
-# ── BAUSTEINE ─────────────────────────────────────────────────────────────────
+# ── HEADER ────────────────────────────────────────────────────────────────────
 
-def _pdf_header(zeitraum: str, dokument: str, styles: dict) -> list:
+def _header(zeitraum: str, dokument: str, s: dict) -> KeepTogether:
     """
-    Gibt eine Liste von Flowables für den Seitenkopf zurück.
-    Wird in KeepTogether gewickelt damit Logo+Titel nie getrennt werden.
+    Professioneller Kopfbereich: Logo rechts, Titel+Meta links, in einer Tabellenzeile.
+    Dadurch stehen Logo und Text auf gleicher Basislinie – kein gestapeltes Layout.
     """
-    elemente = []
-    logo = _logo_element()
-    if logo:
-        elemente.append(logo)
+    logo_p = _logo_pfad()
+
+    if logo_p:
+        # Logo auf 28 mm Breite skalieren, Höhe proportional (1722:510)
+        logo_breite = 28 * mm
+        logo_hoehe = logo_breite * (510 / 1722)
+        logo_img = Image(str(logo_p), width=logo_breite, height=logo_hoehe)
     else:
-        elemente.append(Paragraph('talKIT e.V.', styles['verein']))
+        logo_img = Paragraph('talKIT e.V.', ParagraphStyle(
+            'TKFallback', fontName='Helvetica-Bold', fontSize=10,
+            textColor=FARBE_AKZENT, alignment=TA_RIGHT,
+        ))
 
-    elemente.append(Paragraph(dokument, styles['titel']))
-    elemente.append(Paragraph(
-        f'Zeitraum: <b>{zeitraum}</b> &nbsp;·&nbsp; '
-        f'Erstellt am: {date.today().strftime("%d.%m.%Y")}',
-        styles['meta']
-    ))
-    elemente.append(HRFlowable(
+    titel_block = [
+        Paragraph(dokument, s['titel']),
+        Paragraph(
+            f'Zeitraum: <b>{zeitraum}</b> &nbsp;·&nbsp; '
+            f'Erstellt am: {date.today().strftime("%d.%m.%Y")}',
+            s['meta']
+        ),
+    ]
+
+    # Zweispaltige Tabelle: Titel links, Logo rechts
+    header_tab = Table(
+        [[titel_block, logo_img]],
+        colWidths=[SEITENBREITE * 0.65, SEITENBREITE * 0.35],
+    )
+    header_tab.setStyle(TableStyle([
+        ('VALIGN',       (0, 0), (-1, -1), 'BOTTOM'),
+        ('ALIGN',        (1, 0), (1, 0),   'RIGHT'),
+        ('LEFTPADDING',  (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING',   (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING',(0, 0), (-1, -1), 0),
+    ]))
+
+    trennlinie = HRFlowable(
         width=SEITENBREITE, thickness=1.5, color=FARBE_AKZENT,
-        spaceBefore=0, spaceAfter=5 * mm
-    ))
-    return [KeepTogether(elemente)]
+        spaceBefore=3 * mm, spaceAfter=5 * mm
+    )
+
+    return KeepTogether([header_tab, trennlinie])
 
 
-def _abschnitt(titel: str, inhalt: list, styles: dict) -> KeepTogether:
-    """
-    Wickelt Abschnittsüberschrift + Inhalt in KeepTogether.
-    Verhindert dass der Titel allein am Seitenende steht.
-    """
-    elemente = [
+# ── ABSCHNITT ─────────────────────────────────────────────────────────────────
+
+def _abschnitt(titel: str, inhalt: list, s: dict) -> KeepTogether:
+    """Hält Abschnittsüberschrift + ersten Inhalt zusammen (kein Waisentitel)."""
+    return KeepTogether([
         HRFlowable(
             width=SEITENBREITE, thickness=0.5, color=FARBE_LINIE,
             spaceBefore=6 * mm, spaceAfter=0
         ),
-        Paragraph(titel, styles['abschnitt']),
-    ] + inhalt
-    return KeepTogether(elemente)
+        Paragraph(titel, s['abschnitt']),
+    ] + inhalt)
 
 
-def _zeilen_tabelle(zeilen: list[tuple], styles: dict) -> Table:
-    """
-    Zweispaltige Elster-Zeilentabelle.
-    zeilen: (bezeichnung, wert_str) oder (bezeichnung, wert_str, zeilen_nr)
-    """
+# ── TABELLE ───────────────────────────────────────────────────────────────────
+
+def _tabelle(zeilen: list[tuple], s: dict) -> Table:
     data = []
-    for zeile in zeilen:
-        if len(zeile) == 3:
-            bezeichnung, wert, nr = zeile
+    for z in zeilen:
+        if len(z) == 3:
+            bezeichnung, wert, nr = z
             label = f'Zeile {nr} – {bezeichnung}'
         else:
-            bezeichnung, wert = zeile
+            bezeichnung, wert = z
             label = bezeichnung
-
-        data.append([
-            Paragraph(label, styles['normal']),
-            Paragraph(f'<b>{wert}</b>', styles['wert']),
-        ])
+        data.append([Paragraph(label, s['normal']), Paragraph(f'<b>{wert}</b>', s['wert'])])
 
     t = Table(data, colWidths=[SEITENBREITE * 0.72, SEITENBREITE * 0.28])
     t.setStyle(TableStyle([
@@ -232,28 +217,24 @@ def _zeilen_tabelle(zeilen: list[tuple], styles: dict) -> Table:
     return t
 
 
-# ── EXPORT: VORANMELDUNG ──────────────────────────────────────────────────────
+# ── VORANMELDUNG ──────────────────────────────────────────────────────────────
 
 def exportiere_voranmeldung(ergebnis: dict) -> bytes:
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buffer, pagesize=A4,
-        leftMargin=15*mm, rightMargin=15*mm,
-        topMargin=15*mm, bottomMargin=18*mm  # etwas mehr unten für Fußzeile
-    )
-    styles = _erstelle_styles()
-    e = []
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=15*mm, rightMargin=15*mm,
+                            topMargin=15*mm, bottomMargin=18*mm)
+    s = _styles()
+    e = [_header(ergebnis['zeitraum'],
+                 f'Umsatzsteuer-Voranmeldung {ergebnis["zeitraum"]}', s)]
 
-    e += _pdf_header(
-        zeitraum=ergebnis['zeitraum'],
-        dokument=f'Umsatzsteuer-Voranmeldung {ergebnis["zeitraum"]}',
-        styles=styles
-    )
+    zahllast = ergebnis['zahllast_kontrolle']
+    farbe = FARBE_FEHLER if zahllast > 0 else FARBE_OK
+    richtung = 'Zahlung ans Finanzamt' if zahllast > 0 else 'Erstattung vom Finanzamt'
 
-    # Hauptinhalt als KeepTogether-Block
-    inhalt = [
-        Paragraph('Formular USt 1 A', styles['label']),
-        _zeilen_tabelle([
+    e.append(KeepTogether([
+        Paragraph('Formular USt 1 A', s['label']),
+        _tabelle([
             ('Steuerpflichtige Umsätze 19 %',
              f'{ergebnis["zeile_13_netto_19"]:,.2f} €', 13),
             ('Steuerpflichtige Umsätze 7 %',
@@ -264,97 +245,74 @@ def exportiere_voranmeldung(ergebnis: dict) -> bytes:
              f'{ergebnis["zeile_16_netto_andere"]:,.2f} €', 16),
             ('Abziehbare Vorsteuerbeträge',
              f'{ergebnis["zeile_38_vorsteuer"]:,.2f} €', 38),
-        ], styles),
+        ], s),
         Spacer(1, 5 * mm),
-    ]
-
-    zahllast = ergebnis['zahllast_kontrolle']
-    farbe = FARBE_FEHLER if zahllast > 0 else FARBE_OK
-    richtung = 'Zahlung ans Finanzamt' if zahllast > 0 else 'Erstattung vom Finanzamt'
-    inhalt += [
         Paragraph(
             f'<b>Interne Zahllast (Kontrolle):</b> '
             f'<font color="{farbe.hexval()}">{zahllast:,.2f} €</font> – {richtung}',
-            styles['normal']
+            s['normal']
         ),
         Paragraph(
             'Dieser Wert dient der internen Plausibilitätskontrolle. '
-            'Maßgeblich für Elster sind ausschließlich die Zeilen 13–38.',
-            styles['hinweis']
+            'Maßgeblich für Elster sind die Zeilen 13–38.',
+            s['hinweis']
         ),
-    ]
-    e.append(KeepTogether(inhalt))
+    ]))
 
-    doc.build(e, canvasmaker=_SeitenNummernCanvasV2)
-    return buffer.getvalue()
+    doc.build(e, canvasmaker=_SeitenCanvas)
+    return buf.getvalue()
 
 
-# ── EXPORT: JAHRESSTEUER ──────────────────────────────────────────────────────
+# ── JAHRESSTEUER ──────────────────────────────────────────────────────────────
 
 def exportiere_jahressteuer(eur: dict, ust: dict, kst_gewst: dict) -> bytes:
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buffer, pagesize=A4,
-        leftMargin=15*mm, rightMargin=15*mm,
-        topMargin=15*mm, bottomMargin=18*mm
-    )
-    styles = _erstelle_styles()
-    e = []
-    jahr = eur['jahr']
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=15*mm, rightMargin=15*mm,
+                            topMargin=15*mm, bottomMargin=18*mm)
+    s = _styles()
+    e = [_header(str(eur['jahr']), f'Jahressteuererklärung {eur["jahr"]}', s)]
 
-    e += _pdf_header(
-        zeitraum=str(jahr),
-        dokument=f'Jahressteuererklärung {jahr}',
-        styles=styles
-    )
-
-    # ── EÜR ──────────────────────────────────────────────────────────────────
+    # ── EÜR ──
     eur_inhalt = []
-
     if eur.get('ohne_ueberweisung_ausgeschlossen', 0) > 0:
         eur_inhalt.append(Paragraph(
             f'Hinweis: {eur["ohne_ueberweisung_ausgeschlossen"]} GV(s) ohne '
-            f'Überweisungsdatum wurden nicht berücksichtigt.',
-            styles['hinweis']
+            f'Überweisungsdatum wurden nicht berücksichtigt.', s['hinweis']
         ))
-
     eur_inhalt += [
-        Paragraph('Betriebseinnahmen – wirtschaftlicher Geschäftsbetrieb (D)',
-                  styles['label']),
-        _zeilen_tabelle([
+        Paragraph('Betriebseinnahmen – wirtschaftlicher Geschäftsbetrieb (D)', s['label']),
+        _tabelle([
             ('Steuerpflichtige Betriebseinnahmen (Netto)',
              f'{eur["zeile_15_betriebseinnahmen_netto"]:,.2f} €', 15),
             ('Vereinnahmte Umsatzsteuer',
              f'{eur["zeile_17_vereinnahmte_ust"]:,.2f} €', 17),
             ('Steuerfreie / nicht steuerbare Einnahmen (Sphären A+C)',
              f'{eur["zeile_21_steuerfreie_einnahmen"]:,.2f} €', 21),
-        ], styles),
+        ], s),
         Spacer(1, 3 * mm),
-        Paragraph('Betriebsausgaben – wirtschaftlicher Geschäftsbetrieb (D)',
-                  styles['label']),
-        _zeilen_tabelle([
+        Paragraph('Betriebsausgaben – wirtschaftlicher Geschäftsbetrieb (D)', s['label']),
+        _tabelle([
             ('Sonstige Betriebsausgaben (Netto)',
              f'{eur["zeile_46_betriebsausgaben_netto"]:,.2f} €', 46),
             ('Gezahlte Vorsteuerbeträge',
              f'{eur["zeile_48_vorsteuer"]:,.2f} €', 48),
-        ], styles),
+        ], s),
         Spacer(1, 4 * mm),
     ]
-
     gewinn = eur['gewinn_verlust_d']
     farbe_g = FARBE_OK if gewinn >= 0 else FARBE_FEHLER
     eur_inhalt.append(Paragraph(
         f'<b>Gewinn / Verlust Sphäre D (Zeile 75):</b> '
         f'<font color="{farbe_g.hexval()}">{gewinn:,.2f} €</font>',
-        styles['normal']
+        s['normal']
     ))
+    e.append(_abschnitt('Anlage EÜR – Einnahmenüberschussrechnung', eur_inhalt, s))
 
-    e.append(_abschnitt('Anlage EÜR – Einnahmenüberschussrechnung', eur_inhalt, styles))
-
-    # ── USt Jahreserklärung ───────────────────────────────────────────────────
-    ust_inhalt = [
-        Paragraph('Jahressummen – Basis Rechnungsdatum', styles['label']),
-        _zeilen_tabelle([
+    # ── USt Jahres ──
+    e.append(_abschnitt('Umsatzsteuer-Jahreserklärung (USt 2)', [
+        Paragraph('Jahressummen – Basis Rechnungsdatum', s['label']),
+        _tabelle([
             ('Netto-Umsatz 19 %',
              f'{ust["zeile_13_netto_19"]:,.2f} €', 13),
             ('Netto-Umsatz 7 %',
@@ -365,11 +323,11 @@ def exportiere_jahressteuer(eur: dict, ust: dict, kst_gewst: dict) -> bytes:
              f'{ust["zeile_16_netto_andere"]:,.2f} €', 16),
             ('Abziehbare Vorsteuer gesamt',
              f'{ust["zeile_38_vorsteuer"]:,.2f} €', 38),
-        ], styles),
-    ]
-    e.append(_abschnitt('Umsatzsteuer-Jahreserklärung (USt 2)', ust_inhalt, styles))
+        ], s),
+    ], s))
 
-    # Quartalskontrolle – eigener KeepTogether-Block
+    # Quartalskontrolle
+    nachz = ust['nachzahlung_erstattung']
     header_q = [['Quartal', 'Daten', 'Zahllast\nberechnet',
                  'Vorauszahlung\ngeleistet', 'Differenz']]
     q_rows = []
@@ -377,17 +335,17 @@ def exportiere_jahressteuer(eur: dict, ust: dict, kst_gewst: dict) -> bytes:
         q_erg = ust['quartalsergebnisse'].get(q)
         vz = ust.get(f'vz_q{q}', 0.0)
         if q_erg:
-            zahllast = q_erg['zahllast_kontrolle']
-            q_rows.append([f'Q{q}', '✓',
-                           f'{zahllast:,.2f} €', f'{vz:,.2f} €',
-                           f'{zahllast - vz:,.2f} €'])
+            zl = q_erg['zahllast_kontrolle']
+            q_rows.append([f'Q{q}', '✓', f'{zl:,.2f} €',
+                           f'{vz:,.2f} €', f'{zl - vz:,.2f} €'])
         else:
-            q_rows.append([f'Q{q}', '–', '0,00 €', f'{vz:,.2f} €',
-                           f'{0.0 - vz:,.2f} €'])
+            q_rows.append([f'Q{q}', '–', '0,00 €',
+                           f'{vz:,.2f} €', f'{-vz:,.2f} €'])
 
-    nachz = ust['nachzahlung_erstattung']
-    summen = ['Gesamt', '', f'{ust["zahllast_kontrolle"]:,.2f} €',
-              f'{ust["summe_vorauszahlungen"]:,.2f} €', f'{nachz:,.2f} €']
+    summen = ['Gesamt', '',
+              f'{ust["zahllast_kontrolle"]:,.2f} €',
+              f'{ust["summe_vorauszahlungen"]:,.2f} €',
+              f'{nachz:,.2f} €']
 
     col_b = [SEITENBREITE * 0.12, SEITENBREITE * 0.08,
              SEITENBREITE * 0.25, SEITENBREITE * 0.28, SEITENBREITE * 0.27]
@@ -415,64 +373,56 @@ def exportiere_jahressteuer(eur: dict, ust: dict, kst_gewst: dict) -> bytes:
         else f'<b>Erstattung zu erwarten: {abs(nachz):,.2f} €</b>' if nachz < 0
         else 'Vorauszahlungen und Jahresschuld sind ausgeglichen.'
     )
-
     e.append(KeepTogether([
-        Paragraph('Abgleich Vorauszahlungen', styles['label']),
+        Paragraph('Abgleich Vorauszahlungen', s['label']),
         q_tab,
         Spacer(1, 3 * mm),
-        Paragraph(nachz_text, styles['normal']),
+        Paragraph(nachz_text, s['normal']),
     ]))
 
-    # ── KSt + GewSt ──────────────────────────────────────────────────────────
+    # ── KSt + GewSt ──
     kst_inhalt = [
-        Paragraph('Sphäre D – wirtschaftlicher Geschäftsbetrieb', styles['label']),
+        Paragraph('Sphäre D – wirtschaftlicher Geschäftsbetrieb', s['label']),
     ]
-
     if not kst_gewst['steuerpflichtig']:
         kst_inhalt.append(Paragraph(
-            f'Nullmeldung: {kst_gewst["grund"]}', styles['normal']
+            f'Nullmeldung: {kst_gewst["grund"]}', s['normal']
         ))
     else:
         kst_inhalt += [
-            _zeilen_tabelle([
+            _tabelle([
                 ('Brutto-Einnahmen wirtsch. Geschäftsbetrieb (D)',
                  f'{kst_gewst["brutto_einnahmen_d"]:,.2f} €'),
-                ('Gewinn Sphäre D',
-                 f'{kst_gewst["gewinn_d"]:,.2f} €'),
-                ('Freibetrag',
-                 f'{kst_gewst["freibetrag"]:,.2f} €'),
+                ('Gewinn Sphäre D', f'{kst_gewst["gewinn_d"]:,.2f} €'),
+                ('Freibetrag', f'{kst_gewst["freibetrag"]:,.2f} €'),
                 ('Zu versteuernder Gewinn',
                  f'{kst_gewst["zu_versteuernder_gewinn"]:,.2f} €'),
-            ], styles),
+            ], s),
             Spacer(1, 3 * mm),
-            Paragraph('Körperschaftsteuer', styles['label']),
-            _zeilen_tabelle([
-                ('Körperschaftsteuer (15 %)',
-                 f'{kst_gewst["kst"]:,.2f} €'),
-                ('Solidaritätszuschlag (5,5 % auf KSt)',
-                 f'{kst_gewst["solz"]:,.2f} €'),
-                ('KSt gesamt',
-                 f'{kst_gewst["kst_gesamt"]:,.2f} €'),
-            ], styles),
+            Paragraph('Körperschaftsteuer', s['label']),
+            _tabelle([
+                ('Körperschaftsteuer (15 %)', f'{kst_gewst["kst"]:,.2f} €'),
+                ('Solidaritätszuschlag (5,5 % auf KSt)', f'{kst_gewst["solz"]:,.2f} €'),
+                ('KSt gesamt', f'{kst_gewst["kst_gesamt"]:,.2f} €'),
+            ], s),
             Spacer(1, 3 * mm),
-            Paragraph('Gewerbesteuer', styles['label']),
-            _zeilen_tabelle([
+            Paragraph('Gewerbesteuer', s['label']),
+            _tabelle([
                 ('Steuermessbetrag (Gewinn × 3,5 %)',
                  f'{kst_gewst["gewst_messbetrag"]:,.2f} €'),
                 (f'Gewerbesteuer (Hebesatz {kst_gewst["gewst_hebesatz_prozent"]} %)',
                  f'{kst_gewst["gewst"]:,.2f} €'),
-            ], styles),
+            ], s),
             Spacer(1, 4 * mm),
             Paragraph(
                 f'<b>Steuerbelastung gesamt: {kst_gewst["steuer_gesamt"]:,.2f} €</b>',
-                styles['normal']
+                s['normal']
             ),
         ]
-
     e.append(_abschnitt(
         'Körperschaftsteuer (KSt 1) & Gewerbesteuererklärung (GewSt 1 B)',
-        kst_inhalt, styles
+        kst_inhalt, s
     ))
 
-    doc.build(e, canvasmaker=_SeitenNummernCanvasV2)
-    return buffer.getvalue()
+    doc.build(e, canvasmaker=_SeitenCanvas)
+    return buf.getvalue()

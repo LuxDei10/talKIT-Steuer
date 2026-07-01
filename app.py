@@ -97,11 +97,11 @@ def zeige_logo():
 
 
 def neue_datei_button():
-    """Setzt den Session State zurück und löst einen Rerun aus."""
+    """Setzt den Session State zurück – upload_key-Increment zwingt file_uploader zum Reset."""
     if st.button('Neue Datei wählen', type='secondary', key='neue_datei'):
-        st.cache_data.clear()
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
+        upload_key = st.session_state.get('upload_key', 0) + 1
+        st.session_state.clear()
+        st.session_state['upload_key'] = upload_key
         st.rerun()
 
 
@@ -113,9 +113,14 @@ st.caption('Vorbereitung der Steuerunterlagen auf Basis des Podio-Exports')
 
 st.divider()
 
+# upload_key wird hochgezählt um den file_uploader zuverlässig zurückzusetzen
+if 'upload_key' not in st.session_state:
+    st.session_state['upload_key'] = 0
+
 uploaded_file = st.file_uploader(
     'Podio-Export hochladen',
     type=['xlsx'],
+    key=f'uploader_{st.session_state["upload_key"]}',
     help='Lade die aus Podio exportierte Excel-Datei hoch. '
          'Die Datei muss genau ein Tabellenblatt enthalten.'
 )
@@ -183,9 +188,9 @@ if hat_fehler or hat_andere:
                 st.rerun()
         with col2:
             if st.button('Neue Datei wählen', type='primary', key='neue_datei_fehler'):
-                st.cache_data.clear()
-                for key in list(st.session_state.keys()):
-                    del st.session_state[key]
+                upload_key = st.session_state.get('upload_key', 0) + 1
+                st.session_state.clear()
+                st.session_state['upload_key'] = upload_key
                 st.rerun()
 
         if not st.session_state.get('fehler_bestaetigt', False):
