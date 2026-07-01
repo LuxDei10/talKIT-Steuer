@@ -38,31 +38,23 @@ PAD_H         = 6
 class _SeitenCanvas(rl_canvas.Canvas):
     """
     Zwei-Pass-Canvas für 'Seite X von Y'.
-    Speichert jeden Seitenzustand als Snapshot, schreibt Fußzeilen im zweiten Pass.
-    Seitenzahl wird als einfacher Index gezählt – keine dict-Vergleiche.
+    showPage() speichert __dict__.copy() – save() iteriert mit enumerate().
+    Kein dict-Vergleich, kein Index-Lookup, garantiert korrekte Reihenfolge.
     """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._snapshots = []
+        self._page_states = []
 
     def showPage(self):
-        # Zustand einfrieren: nur die Felder die für den zweiten Pass nötig sind
-        self._snapshots.append({
-            '_x': self._x, '_y': self._y,
-            '_fontname': self._fontname, '_fontsize': self._fontsize,
-            '_fillColorObj': self._fillColorObj,
-            '_strokeColorObj': self._strokeColorObj,
-            # Gesamter Zustand für korrekten Wiederaufbau
-            '_saved': dict(self.__dict__),
-        })
+        self._page_states.append(self.__dict__.copy())
         self._startPage()
 
     def save(self):
-        gesamt = len(self._snapshots)
-        for i, snap in enumerate(self._snapshots):
-            self.__dict__.update(snap['_saved'])
-            self._fusszeile(seite=i + 1, gesamt=gesamt)
+        total = len(self._page_states)
+        for i, state in enumerate(self._page_states):
+            self.__dict__.update(state)
+            self._fusszeile(seite=i + 1, gesamt=total)
             rl_canvas.Canvas.showPage(self)
         rl_canvas.Canvas.save(self)
 
@@ -70,12 +62,11 @@ class _SeitenCanvas(rl_canvas.Canvas):
         self.saveState()
         self.setFont('Helvetica', 7)
         self.setFillColor(colors.HexColor('#AAAAAA'))
-        self.drawString(15 * mm, 8 * mm, 'talKIT e.V. · Steuermodul')
-        self.drawRightString(A4[0] - 15 * mm, 8 * mm, f'Seite {seite} von {gesamt}')
-        # dünne Trennlinie über Fußzeile
         self.setStrokeColor(colors.HexColor('#DDDDDD'))
         self.setLineWidth(0.3)
         self.line(15 * mm, 12 * mm, A4[0] - 15 * mm, 12 * mm)
+        self.drawString(15 * mm, 8 * mm, 'talKIT e.V. · Steuermodul')
+        self.drawRightString(A4[0] - 15 * mm, 8 * mm, f'Seite {seite} von {gesamt}')
         self.restoreState()
 
 
@@ -147,18 +138,28 @@ def _header(zeitraum: str, dokument: str, s: dict) -> KeepTogether:
             textColor=FARBE_AKZENT, alignment=TA_RIGHT,
         ))
 
-    titel_block = [
-        Paragraph(dokument, s['titel']),
-        Paragraph(
-            f'Zeitraum: <b>{zeitraum}</b> &nbsp;·&nbsp; '
-            f'Erstellt am: {date.today().strftime("%d.%m.%Y")}',
-            s['meta']
-        ),
-    ]
+    # Titel-Block als einspaltige Tabelle – ReportLab akzeptiert keine
+    # rohen Listen als Tabellenzellen, nur einzelne Flowables
+    titel_tab = Table(
+        [[Paragraph(dokument, s['titel'])],
+         [Paragraph(
+             f'Zeitraum: <b>{zeitraum}</b> &nbsp;·&nbsp; '
+             f'Erstellt am: {date.today().strftime("%d.%m.%Y")}',
+             s['meta']
+         )]],
+        colWidths=[SEITENBREITE * 0.65],
+    )
+    titel_tab.setStyle(TableStyle([
+        ('LEFTPADDING',  (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING',   (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING',(0, 0), (0, 0),   2),
+        ('BOTTOMPADDING',(0, 1), (0, 1),   0),
+    ]))
 
     # Zweispaltige Tabelle: Titel links, Logo rechts
     header_tab = Table(
-        [[titel_block, logo_img]],
+        [[titel_tab, logo_img]],
         colWidths=[SEITENBREITE * 0.65, SEITENBREITE * 0.35],
     )
     header_tab.setStyle(TableStyle([
