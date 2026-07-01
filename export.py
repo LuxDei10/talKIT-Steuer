@@ -37,7 +37,7 @@ PAD_ZELLE_H = 6    # horizontales Padding in Tabellenzellen (pt)
 
 def _logo_element() -> Image | None:
     """Gibt ein ReportLab-Image-Objekt für das talKIT-Logo zurück, oder None."""
-    for pfad in ['talKIT logo gruen.png', 'assets/talKIT logo gruen.png']:
+    for pfad in ['talKITlogogruen.png', 'assets/talKITlogogruen.png']:
         p = Path(pfad)
         if p.exists():
             # Originalgröße: 1722 × 510 px → auf 40 mm Höhe skalieren
